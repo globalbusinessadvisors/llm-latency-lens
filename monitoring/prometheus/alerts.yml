@@ -1,0 +1,128 @@
+# Prometheus alerting rules for LLM Latency Lens
+
+groups:
+  - name: llm_latency_lens_alerts
+    interval: 30s
+    rules:
+      # High latency alert
+      - alert: HighLLMLatency
+        expr: |
+          llm_request_duration_seconds{quantile="0.95"} > 5
+        for: 5m
+        labels:
+          severity: warning
+          component: llm-latency-lens
+        annotations:
+          summary: "High LLM request latency detected"
+          description: "95th percentile latency is {{ $value }}s for {{ $labels.provider }}"
+
+      # Very high latency alert
+      - alert: VeryHighLLMLatency
+        expr: |
+          llm_request_duration_seconds{quantile="0.95"} > 10
+        for: 2m
+        labels:
+          severity: critical
+          component: llm-latency-lens
+        annotations:
+          summary: "Critical LLM request latency detected"
+          description: "95th percentile latency is {{ $value }}s for {{ $labels.provider }}"
+
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          rate(llm_request_errors_total[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          component: llm-latency-lens
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} for {{ $labels.provider }}"
+
+      # Service down
+      - alert: ServiceDown
+        expr: |
+          up{job="llm-latency-lens"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: llm-latency-lens
+        annotations:
+          summary: "LLM Latency Lens service is down"
+          description: "Service {{ $labels.instance }} has been down for more than 1 minute"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          process_resident_memory_bytes{job="llm-latency-lens"} > 800000000
+        for: 5m
+        labels:
+          severity: warning
+          component: llm-latency-lens
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value | humanize }}B on {{ $labels.instance }}"
+
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: |
+          rate(process_cpu_seconds_total{job="llm-latency-lens"}[5m]) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          component: llm-latency-lens
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # Request rate drop
+      - alert: RequestRateDrop
+        expr: |
+          rate(llm_requests_total[5m]) < 0.1 and rate(llm_requests_total[5m] offset 10m) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: llm-latency-lens
+        annotations:
+          summary: "Significant drop in request rate"
+          description: "Request rate dropped from {{ $value }} req/s"
+
+      # Token throughput anomaly
+      - alert: LowTokenThroughput
+        expr: |
+          rate(llm_tokens_generated_total[5m]) < 10 and rate(llm_tokens_generated_total[5m] offset 10m) > 50
+        for: 5m
+        labels:
+          severity: warning
+          component: llm-latency-lens
+        annotations:
+          summary: "Low token throughput detected"
+          description: "Token throughput is {{ $value }} tokens/s for {{ $labels.provider }}"
+
+  - name: prometheus_alerts
+    interval: 30s
+    rules:
+      # Prometheus scrape failures
+      - alert: PrometheusScrapeFailing
+        expr: |
+          up == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: prometheus
+        annotations:
+          summary: "Prometheus cannot scrape target"
+          description: "Prometheus cannot scrape {{ $labels.job }} on {{ $labels.instance }}"
+
+      # Prometheus storage issues
+      - alert: PrometheusStorageIssue
+        expr: |
+          prometheus_tsdb_storage_blocks_bytes / prometheus_tsdb_wal_storage_size_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          component: prometheus
+        annotations:
+          summary: "Prometheus storage utilization high"
+          description: "Prometheus storage is at {{ $value | humanizePercentage }} capacity"

@@ -1,0 +1,76 @@
+# Prometheus configuration for LLM Latency Lens monitoring
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'llm-latency-lens'
+    environment: 'development'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+      timeout: 10s
+
+# Load alerting rules
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+
+  # LLM Latency Lens metrics
+  - job_name: 'llm-latency-lens'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ['llm-latency-lens:9090']
+        labels:
+          service: 'llm-latency-lens'
+          component: 'profiler'
+
+    # Relabel configurations for better metric organization
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [__address__]
+        regex: '([^:]+)(?::\d+)?'
+        replacement: '$1'
+        target_label: host
+
+    # Metric relabeling
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'go_.*'
+        action: drop
+
+  # Node exporter for host metrics (optional - if deployed)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: []
+        # Add node exporter targets if needed
+        # - 'node-exporter:9100'
+
+  # cAdvisor for container metrics (optional - if deployed)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: []
+        # Add cAdvisor targets if needed
+        # - 'cadvisor:8080'
+
+# Remote write configuration (optional - for long-term storage)
+# remote_write:
+#   - url: https://prometheus-remote-write-endpoint/api/v1/write
+#     basic_auth:
+#       username: user
+#       password: pass

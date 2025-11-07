@@ -1,0 +1,202 @@
+name: Docker Build
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
+      - 'crates/**'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build and test Docker image
+  docker-build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: llm-latency-lens
+          tags: |
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=docker,dest=/tmp/image-${{ strategy.job-index }}.tar
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-${{ strategy.job-index }}
+          path: /tmp/image-${{ strategy.job-index }}.tar
+
+  # Test Docker image
+  docker-test:
+    name: Test Docker Image
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-0
+          path: /tmp
+
+      - name: Load image
+        run: |
+          docker load --input /tmp/image-0.tar
+          docker image ls -a
+
+      - name: Test Docker image
+        run: |
+          # Test help command
+          docker run --rm llm-latency-lens:pr-${{ github.event.number }} --help
+
+          # Test version command
+          docker run --rm llm-latency-lens:pr-${{ github.event.number }} --version
+
+      - name: Inspect image
+        run: |
+          docker inspect llm-latency-lens:pr-${{ github.event.number }}
+
+      - name: Check image size
+        run: |
+          SIZE=$(docker image inspect llm-latency-lens:pr-${{ github.event.number }} --format='{{.Size}}')
+          SIZE_MB=$((SIZE / 1024 / 1024))
+          echo "Image size: ${SIZE_MB}MB"
+
+          # Fail if image is larger than 100MB (adjust as needed)
+          if [ $SIZE_MB -gt 100 ]; then
+            echo "::error::Image size (${SIZE_MB}MB) exceeds 100MB limit"
+            exit 1
+          fi
+
+  # Scan Docker image for vulnerabilities
+  docker-scan:
+    name: Scan Docker Image
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-0
+          path: /tmp
+
+      - name: Load image
+        run: |
+          docker load --input /tmp/image-0.tar
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'llm-latency-lens:pr-${{ github.event.number }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Run Dockle for best practices
+        uses: goodwithtech/dockle-action@main
+        with:
+          image: 'llm-latency-lens:pr-${{ github.event.number }}'
+          format: 'json'
+          exit-code: '1'
+          exit-level: 'warn'
+
+  # Benchmark Docker image performance
+  docker-benchmark:
+    name: Benchmark Docker Image
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-0
+          path: /tmp
+
+      - name: Load image
+        run: |
+          docker load --input /tmp/image-0.tar
+
+      - name: Measure startup time
+        run: |
+          echo "Measuring container startup time..."
+          START=$(date +%s%N)
+          docker run --rm llm-latency-lens:pr-${{ github.event.number }} --version
+          END=$(date +%s%N)
+          DURATION=$((($END - $START) / 1000000))
+          echo "Startup time: ${DURATION}ms"
+
+          # Fail if startup takes more than 2 seconds
+          if [ $DURATION -gt 2000 ]; then
+            echo "::warning::Startup time (${DURATION}ms) exceeds 2000ms"
+          fi
+
+  # Summary
+  docker-summary:
+    name: Docker Build Summary
+    needs: [docker-build, docker-test, docker-scan, docker-benchmark]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check build status
+        if: contains(needs.*.result, 'failure')
+        run: |
+          echo "::error::One or more Docker build jobs failed"
+          exit 1
+
+      - name: Build successful
+        run: echo "Docker build completed successfully!"

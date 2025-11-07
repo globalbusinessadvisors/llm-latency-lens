@@ -1,0 +1,382 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Create GitHub release
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+      upload_url: ${{ steps.create-release.outputs.upload_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: get-version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install git-cliff
+        run: |
+          curl -L https://github.com/orhun/git-cliff/releases/download/v1.4.0/git-cliff-1.4.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          sudo mv git-cliff-1.4.0/git-cliff /usr/local/bin/
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            git-cliff --tag v${{ steps.get-version.outputs.version }} > CHANGELOG.md
+          else
+            git-cliff --latest > CHANGELOG.md
+          fi
+          cat CHANGELOG.md
+
+      - name: Create GitHub Release
+        id: create-release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.get-version.outputs.version }}
+          release_name: Release v${{ steps.get-version.outputs.version }}
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: false
+
+  # Build and upload release binaries
+  build-release:
+    name: Build Release Binaries
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: llm-latency-lens
+            asset_name: llm-latency-lens-linux-amd64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: llm-latency-lens
+            asset_name: llm-latency-lens-linux-amd64-musl
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: llm-latency-lens
+            asset_name: llm-latency-lens-linux-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: llm-latency-lens
+            asset_name: llm-latency-lens-macos-amd64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: llm-latency-lens
+            asset_name: llm-latency-lens-macos-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: llm-latency-lens.exe
+            asset_name: llm-latency-lens-windows-amd64.exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install musl tools (Linux MUSL)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Strip binary (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+      - name: Create release directory
+        shell: bash
+        run: |
+          mkdir -p release
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} release/${{ matrix.asset_name }}
+          cp README.md LICENSE release/
+
+      - name: Create tarball (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd release
+          tar czf ${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.tar.gz *
+          shasum -a 256 ${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.tar.gz > ${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.tar.gz.sha256
+
+      - name: Create zip (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          cd release
+          Compress-Archive -Path * -DestinationPath ${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.zip
+          (Get-FileHash ${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.zip -Algorithm SHA256).Hash | Out-File -FilePath ${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.zip.sha256
+
+      - name: Upload tarball to release (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./release/${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.tar.gz
+          asset_name: ${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload tarball checksum (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./release/${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.tar.gz.sha256
+          asset_name: ${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.tar.gz.sha256
+          asset_content_type: text/plain
+
+      - name: Upload zip to release (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./release/${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.zip
+          asset_name: ${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.zip
+          asset_content_type: application/zip
+
+      - name: Upload zip checksum (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./release/${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.zip.sha256
+          asset_name: ${{ matrix.asset_name }}-v${{ needs.create-release.outputs.version }}.zip.sha256
+          asset_content_type: text/plain
+
+  # Build and push Docker images with version tags
+  docker-release:
+    name: Build and Push Docker Release
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version
+        id: version
+        run: echo "version=${{ needs.create-release.outputs.version }}" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            llm-devops/llm-latency-lens:${{ steps.version.outputs.version }}
+            llm-devops/llm-latency-lens:latest
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            RUST_VERSION=1.75
+
+  # Publish to crates.io
+  publish-crates:
+    name: Publish to Crates.io
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Update version in Cargo.toml
+        run: |
+          VERSION=${{ needs.create-release.outputs.version }}
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" crates/*/Cargo.toml
+
+      - name: Publish crates to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          # Publish workspace crates first (in dependency order)
+          cargo publish -p llm-latency-lens-core --token $CARGO_REGISTRY_TOKEN || true
+          sleep 10
+          cargo publish -p llm-latency-lens-providers --token $CARGO_REGISTRY_TOKEN || true
+          sleep 10
+          cargo publish -p llm-latency-lens-metrics --token $CARGO_REGISTRY_TOKEN || true
+          sleep 10
+          cargo publish -p llm-latency-lens-exporters --token $CARGO_REGISTRY_TOKEN || true
+          sleep 10
+
+          # Publish main crate
+          cargo publish --token $CARGO_REGISTRY_TOKEN
+
+  # Update Homebrew tap (optional)
+  update-homebrew:
+    name: Update Homebrew Formula
+    needs: [create-release, build-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: llm-devops/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        run: |
+          VERSION=${{ needs.create-release.outputs.version }}
+          # Download and compute SHA256 for macOS amd64
+          curl -L -o llm-latency-lens.tar.gz https://github.com/${{ github.repository }}/releases/download/v$VERSION/llm-latency-lens-macos-amd64-v$VERSION.tar.gz
+          SHA256=$(shasum -a 256 llm-latency-lens.tar.gz | cut -d ' ' -f 1)
+
+          # Update formula file
+          cat > Formula/llm-latency-lens.rb <<EOF
+          class LlmLatencyLens < Formula
+            desc "Enterprise-grade command-line profiler for LLM performance measurement"
+            homepage "https://github.com/${{ github.repository }}"
+            url "https://github.com/${{ github.repository }}/releases/download/v$VERSION/llm-latency-lens-macos-amd64-v$VERSION.tar.gz"
+            sha256 "$SHA256"
+            version "$VERSION"
+            license "Apache-2.0"
+
+            def install
+              bin.install "llm-latency-lens-macos-amd64" => "llm-latency-lens"
+            end
+
+            test do
+              system "#{bin}/llm-latency-lens", "--version"
+            end
+          end
+          EOF
+
+      - name: Commit and push
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add Formula/llm-latency-lens.rb
+          git commit -m "Update llm-latency-lens to v${{ needs.create-release.outputs.version }}"
+          git push
+
+  # Generate SBOM (Software Bill of Materials)
+  generate-sbom:
+    name: Generate SBOM
+    needs: create-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-sbom
+        run: cargo install cargo-sbom --locked
+
+      - name: Generate SBOM
+        run: cargo sbom > sbom.json
+
+      - name: Upload SBOM to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./sbom.json
+          asset_name: sbom.json
+          asset_content_type: application/json
+
+  # Notify on success
+  notify-success:
+    name: Notify Release Success
+    needs: [create-release, build-release, docker-release, publish-crates]
+    runs-on: ubuntu-latest
+    if: success()
+    steps:
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "Release v${{ needs.create-release.outputs.version }} of LLM-Latency-Lens completed successfully! :rocket:",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Release v${{ needs.create-release.outputs.version }}* of LLM-Latency-Lens completed successfully! :rocket:\n\n<https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }}|View Release>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

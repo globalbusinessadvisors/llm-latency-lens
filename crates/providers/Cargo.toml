@@ -1,0 +1,26 @@
+[package]
+name = "llm-latency-lens-providers"
+version = "0.1.0"
+edition = "2021"
+authors = ["LLM DevOps Team"]
+description = "Provider adapters for LLM Latency Lens"
+license = "Apache-2.0"
+
+[dependencies]
+llm-latency-lens-core = { path = "../core" }
+tokio = { version = "1.41", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+reqwest-eventsource = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1.8"
+
+[dev-dependencies]
+tokio-test = "0.4"
+wiremock = "0.6"
+mockito = "1.5"

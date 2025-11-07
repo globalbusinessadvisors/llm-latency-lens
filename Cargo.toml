@@ -1,0 +1,123 @@
+[package]
+name = "llm-latency-lens"
+version = "0.1.0"
+edition = "2021"
+authors = ["LLM DevOps Team"]
+description = "Enterprise-grade command-line profiler for LLM performance measurement"
+license = "Apache-2.0"
+repository = "https://github.com/llm-devops/llm-latency-lens"
+keywords = ["llm", "profiling", "latency", "benchmarking", "performance"]
+categories = ["command-line-utilities", "development-tools::profiling"]
+rust-version = "1.75"
+
+[workspace]
+members = [
+    ".",
+    "crates/core",
+    "crates/providers",
+    "crates/metrics",
+    "crates/exporters",
+]
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1.41", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# HTTP client with streaming support
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+reqwest-eventsource = "0.6"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+serde_yaml = "0.9"
+
+# CLI framework
+clap = { version = "4.5", features = ["derive", "env", "unicode", "wrap_help"] }
+clap_complete = "4.5"
+
+# High-precision timing
+quanta = "0.12"
+
+# Statistical metrics
+hdrhistogram = "7.5"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = "0.27"
+
+# OpenTelemetry
+opentelemetry = { version = "0.27", features = ["metrics", "trace"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["tonic", "metrics", "trace"] }
+opentelemetry-semantic-conventions = "0.27"
+
+# Prometheus metrics
+prometheus = "0.13"
+
+# Configuration management
+config = "0.14"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID generation
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Terminal output
+console = "0.15"
+indicatif = { version = "0.17", features = ["tokio"] }
+colored = "2.1"
+tabled = "0.16"
+
+# Rate limiting
+governor = "0.8"
+
+# Workspace crates
+llm-latency-lens-core = { path = "crates/core" }
+llm-latency-lens-providers = { path = "crates/providers" }
+llm-latency-lens-metrics = { path = "crates/metrics" }
+llm-latency-lens-exporters = { path = "crates/exporters" }
+
+[dev-dependencies]
+# Testing
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+mockito = "1.5"
+tempfile = "3.13"
+test-case = "3.3"
+proptest = "1.6"
+wiremock = "0.6"
+
+# Benchmarking
+tokio-test = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.bench]
+inherits = "release"
+
+[[bin]]
+name = "llm-latency-lens"
+path = "src/main.rs"
+
+[[bench]]
+name = "timing_precision"
+harness = false
+
+[[bench]]
+name = "concurrent_requests"
+harness = false
