@@ -44,6 +44,7 @@
 pub mod adapters;
 pub mod benchmarks;
 pub mod config;
+pub mod consumers;
 pub mod orchestrator;
 
 // Re-export core types for convenience
@@ -68,6 +69,15 @@ pub use benchmarks::{
     run_all_benchmarks, BenchmarkConfig, BenchmarkResult,
     ensure_output_dirs, generate_summary, output_dir, raw_output_dir,
     read_all_results, write_result, write_results, write_summary,
+};
+
+// Re-export upstream consumers
+pub use consumers::{
+    AnalyticsHubConsumer, AnalyticsHubConfig, BaselineComparison, ConsumerError,
+    ConsumerResult, DataConsumer, HistoricalBaseline, MergedConsumer,
+    ObservatoryConsumer, ObservatoryConfig, RetryConfig, RollingWindow,
+    TelemetrySpan, TestBenchFormat, TestBenchMetrics, TestBenchReader, TimeWindow,
+    TracedRequest,
 };
 
 use anyhow::Result;
