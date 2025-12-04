@@ -82,7 +82,7 @@ uuid = { version = "1.11", features = ["v4", "serde"] }
 console = "0.15"
 indicatif = { version = "0.17", features = ["tokio"] }
 colored = "2.1"
-tabled = "0.16"
+tabled = "0.20"
 
 # Rate limiting
 governor = "0.8"
